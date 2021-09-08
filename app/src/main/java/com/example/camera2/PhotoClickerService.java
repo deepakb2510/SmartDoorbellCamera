@@ -1,4 +1,4 @@
-package com.example.test;
+package com.example.camera2;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -6,18 +6,21 @@ import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.SurfaceTexture;
 import android.hardware.Camera;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.media.AudioManager;
+import android.media.MediaPlayer;
 import android.os.Build;
 import android.os.IBinder;
-import android.os.Looper;
 import android.util.Log;
-import android.widget.Toast;
 
 import androidx.annotation.RequiresApi;
 import androidx.core.app.NotificationCompat;
@@ -26,6 +29,7 @@ import com.google.firebase.storage.FirebaseStorage;
 import com.google.firebase.storage.StorageReference;
 import com.google.firebase.storage.UploadTask;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
@@ -38,6 +42,7 @@ public class PhotoClickerService extends Service {
     private SensorManager sensorManager;
     private boolean takePicture = true;
     boolean runService = true;
+    MediaPlayer mediaPlayer;
 
     //Service requires empty constructor
     public PhotoClickerService() {
@@ -103,6 +108,11 @@ public class PhotoClickerService extends Service {
         if (surfaceTexture != null) {
             surfaceTexture.release();
         }
+        if (mediaPlayer!=null){
+            mediaPlayer.stop();
+            mediaPlayer.reset();
+            mediaPlayer.release();
+        }
 
         if (sensorManager != null && sensorEventListener != null) {
             sensorManager.unregisterListener(sensorEventListener);
@@ -127,17 +137,37 @@ public class PhotoClickerService extends Service {
 
         mCamera = Camera.open(getFrontCameraId());
         if (mCamera != null && runService) {
+            mCamera.setDisplayOrientation(0);
+            Camera.Parameters p = mCamera.getParameters();
+            mCamera.enableShutterSound(true);
+            mCamera.setParameters(p);
             try {
                 mCamera.startPreview();
                 mCamera.setPreviewTexture(surfaceTexture);
                 mCamera.takePicture(null, null, (data, camera) -> {
-                    StorageReference referenceMain = FirebaseStorage.getInstance().getReference();
-                    StorageReference fileRefer = referenceMain.child("images/" + name + ".jpeg");
-                    fileRefer.putBytes(data);
-                    UploadTask task = fileRefer.putBytes(data);
-                    task.addOnCompleteListener(taskSnapshot -> {
-                        takePicture = true; //Ready to take picture
-                    });
+                    String audioUrl = "https://firebasestorage.googleapis.com/v0/b/doorbell-92cb3.appspot.com/o/sounds%2FDoorbell_Ding_Dong.mp3?alt=media&token=a9fa9bfd-3361-47c5-b179-456431e98af0";
+                    mediaPlayer = new MediaPlayer();
+
+                    // below line is use to set the audio
+                    // stream type for our media player.
+                    mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+
+                    // below line is use to set our
+                    // url to our media player.
+                    try {
+                        mediaPlayer.setDataSource(audioUrl);
+                        // below line is use to prepare
+                        // and start our media player.
+                        if (!mediaPlayer.isPlaying()) {
+                            mediaPlayer.prepare();
+                            mediaPlayer.start();
+                        }
+
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                    Bitmap old = BitmapFactory.decodeByteArray(data, 0, data.length);
+                    uploadtofirebase(old, name);
 
                     surfaceTexture.release();
                     mCamera.release();
@@ -199,5 +229,41 @@ public class PhotoClickerService extends Service {
             if (ci.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) return i;
         }
         return -1; // No front-facing camera found
+    }
+
+    private void uploadtofirebase(Bitmap photo, String name) {
+        byte[] bytes = null;
+        ByteArrayOutputStream baos = null;
+
+        Matrix matrix = new Matrix();
+        if (photo.getWidth() > photo.getHeight())
+            matrix.postRotate(270);
+        photo = Bitmap.createBitmap(photo, 0, 0, photo.getWidth(), photo.getHeight(), matrix, true);
+
+        baos = new ByteArrayOutputStream();
+        photo.compress(Bitmap.CompressFormat.JPEG, 100, baos);
+        //firebase setup?ok
+        bytes = baos.toByteArray();
+
+        StorageReference referenceMain = FirebaseStorage.getInstance().getReference();
+        StorageReference fileRefer = referenceMain.child("images/" + name + ".jpeg");
+        Log.e("AAA", "uploadtofirebase: " + photo.getWidth());
+        Log.e("AAA", "uploadtofirebase: " + photo.getHeight());
+        UploadTask task = fileRefer.putBytes(bytes);
+        task.addOnSuccessListener(taskSnapshot -> {
+            Log.d("AAA", "uploadtofirebase: " + taskSnapshot.getUploadSessionUri().toString());
+        });
+        task.addOnCompleteListener(o -> takePicture = true);
+        if (photo!=null)
+            photo = null;
+        try {
+            if (baos != null) {
+                baos.flush();
+                baos.close();
+                baos = null;
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 }
